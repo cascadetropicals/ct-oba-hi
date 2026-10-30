@@ -413,16 +413,21 @@
     // One call loads status + details + items. Used on first load and after an order.
     function loadForm() {
       document.getElementById('loadError').style.display = 'none';
+      var lb = document.getElementById('itemsBody');
+      if (lb && !lb.children.length) lb.innerHTML = '<tr id="loadingRow"><td colspan="6" style="text-align:center;padding:28px;color:#6b7a5e;">Loading items\u2026 this can take a few seconds.</td></tr>';
       apiGet('load').then(function (d) {
         if (d.status && d.status.closed) { showClosed(d.status); return; }
         populateHeader(d.details);
         populateItems(d.items);
       }).catch(function () {
+        var lr = document.getElementById('loadingRow'); if (lr) lr.remove();
         document.getElementById('loadError').style.display = 'block';
       });
     }
 
     var itemsState = [];
+    var pendingOrders = [];   // lines of the order being submitted
+    var lastOrderedQty = {};  // itemCode -> qty of the last saved order
     var floatingBtnAllowed = true; // false while confirmation screen is shown
     var activeLabelFilter = null; // 'NEW' | 'BACK IN STOCK' | null — which highlight sort is active
 
@@ -842,6 +847,7 @@
       });
       if (orders.length === 0) { showError('Please order at least one item'); return; }
 
+      pendingOrders = orders;
       showLoading(true);
       apiPost('submitOrder', {
         customerName:  customerName,
@@ -856,6 +862,8 @@
     function onSuccess(result) {
       showLoading(false);
       if (result && result.success) {
+        lastOrderedQty = {};
+        pendingOrders.forEach(function (o) { lastOrderedQty[o.itemCode] = (lastOrderedQty[o.itemCode] || 0) + o.qty; });
         renderConfirmation(result.confirmation || {});
         showConfirmation();
       } else {
@@ -925,7 +933,19 @@
       activeLabelFilter = null;
       document.querySelectorAll('.filter-chip').forEach(function (b) { b.classList.remove('active'); });
       updateTotals();
-      loadForm();
+      // Re-use the items already on screen (minus what was just ordered) instead of
+      // reloading from the server, which can be very slow right after an order is saved.
+      // The server still checks availability when the next order is submitted.
+      if (itemsState && itemsState.length) {
+        itemsState.forEach(function (it) {
+          var q = lastOrderedQty[it.itemCode] || 0;
+          if (q > 0) it.qtyAvail = Math.max(0, (it.qtyAvail || 0) - q);
+        });
+        lastOrderedQty = {};
+        populateItems(itemsState);
+      } else {
+        loadForm();
+      }
       floatingBtnAllowed = true;
       document.getElementById('confirmation').style.display = 'none';
       document.getElementById('orderForm').style.display = '';
